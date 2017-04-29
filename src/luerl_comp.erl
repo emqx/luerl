@@ -32,6 +32,8 @@
 
 -import(lists, [member/2,keysearch/3,mapfoldl/3]).
 
+-include_lib("kernel/include/file.hrl").
+
 -include("luerl.hrl").
 -include("luerl_comp.hrl").
 
@@ -108,8 +110,9 @@ compile(Ps, St0) ->
 %%  {done,PrintFun,Ext}
 
 file_passes() ->				%Reading from file
-    [{do,fun do_read_file/1}|
-     list_passes()].
+    [{do,fun do_read_file/1},
+     {do,fun do_parse/1}|
+     forms_passes()].
 
 list_passes() ->				%Scanning string
     [{do,fun do_scan/1},
@@ -149,22 +152,36 @@ do_passes([], St) -> {ok,St}.
 %% do_scan(State) -> {ok,State} | {error,State}.
 %% do_parse(State) -> {ok,State} | {error,State}.
 %% do_pass_1(State) -> {ok,State} | {error,State}.
-%% do_return(State) -> {ok,State}.
 %%  The actual compiler passes.
 
+check_file_header(<<$#, Rest/binary>>) ->  % skip line
+    skip_header_line(Rest);
+check_file_header(<<239, 187, 191, Rest/binary>>) ->  % skip BOM
+    Rest;
+check_file_header(Binary) ->
+    Binary.
+
+skip_header_line(<<16#0D, Rest/binary>>) ->
+    Rest;
+skip_header_line(<<16#0A, Rest/binary>>) ->
+    Rest;
+skip_header_line(<<_H, Rest/binary>>) ->
+    skip_header_line(Rest).
+
 do_read_file(#comp{lfile=Name}=St) ->
+    %% Read the bytes in a file skipping an initial # line or Windows BOM.
     case file:read_file(Name) of
-	{ok,Bin} -> {ok,St#comp{code=binary_to_list(Bin)}};
-	{error,E} -> {error,St#comp{errors=[{none,file,E}]}}
+        {ok, Binary} ->
+            Data = binary_to_list(check_file_header(Binary)),
+            {ok,Tokens,_EndLine} = luerl_scan:string(Data),
+            {ok, St#comp{code = Tokens}};
+        {error, Reason} ->
+            {error,St#comp{errors=[{none,file,Reason}]}}
     end.
 
-do_scan(#comp{code=Str0}=St) ->
-    %% Trim away any stupid BOM.
-    case Str0 of
-	[239,187,191|Str1] -> ok;
-	Str1 -> ok
-    end,
-    case luerl_scan:string(Str1) of
+
+do_scan(#comp{code=Str}=St) ->
+    case luerl_scan:string(Str) of
 	{ok,Ts,_} -> {ok,St#comp{code=Ts}}; 
 	{error,E,_} -> {error,St#comp{errors=[E]}}
     end.
