@@ -154,26 +154,31 @@ do_passes([], St) -> {ok,St}.
 %% do_pass_1(State) -> {ok,State} | {error,State}.
 %%  The actual compiler passes.
 
+check_file_header(<<$#, Rest/binary>>) ->  % skip line
+    skip_header_line(Rest);
+check_file_header(<<239, 187, 191, Rest/binary>>) ->  % skip BOM
+    Rest;
+check_file_header(Binary) ->
+    Binary.
+
+skip_header_line(<<16#0D, Rest/binary>>) ->
+    Rest;
+skip_header_line(<<16#0A, Rest/binary>>) ->
+    Rest;
+skip_header_line(<<_H, Rest/binary>>) ->
+    skip_header_line(Rest).
+
 do_read_file(#comp{lfile=Name}=St) ->
     %% Read the bytes in a file skipping an initial # line or Windows BOM.
-    case file:open(Name, [read]) of
-	{ok,F} ->
-	    %% Check if first line a script or Windows BOM, if so skip it.
-	    case io:get_line(F, '') of
-		"#" ++ _ -> ok;			%Skip line
-		[239,187,191|_] ->
-		    file:position(F, 3);	%Skip BOM
-		_ -> file:position(F, bof)	%Get it all
-	    end,
-	    %% Now read the file.
-	    Ret = case io:request(F, {get_until,latin1,'',luerl_scan,tokens,[1]}) of
-		      {ok,Ts,_} -> {ok,St#comp{code=Ts}};
-		      {error,E,L} -> {error,St#comp{errors=[{L,io,E}]}}
-		  end,
-	    file:close(F),
-	    Ret;
-	{error,E} -> {error,St#comp{errors=[{none,file,E}]}}
+    case file:read_file(Name) of
+        {ok, Binary} ->
+            Data = binary_to_list(check_file_header(Binary)),
+            {ok,Tokens,_EndLine} = luerl_scan:string(Data),
+            {ok, St#comp{code = Tokens}};
+        {error, Reason} ->
+            {error,St#comp{errors=[{none,file,Reason}]}}
     end.
+
 
 do_scan(#comp{code=Str}=St) ->
     case luerl_scan:string(Str) of
